@@ -68,26 +68,68 @@ Object.getOwnPropertyNames(window.MyBridge)
 
 ### 呼叫測試
 
-假設 Android 端定義了以下 interface：
+#### Android 端定義
 
 ```kotlin
 class JsBridge(private val context: WeakReference<Activity>) {
 
+    // 無參數，有回傳值
     @JavascriptInterface
-    fun getToken(): String { ... }
+    fun getToken(): String {
+        return sessionManager.token
+    }
 
+    // 有參數，無回傳值
     @JavascriptInterface
-    fun showToast(message: String) { ... }
+    fun showToast(message: String) {
+        context.get()?.runOnUiThread {
+            Toast.makeText(context.get(), message, Toast.LENGTH_SHORT).show()
+        }
+    }
 
+    // 無參數，無回傳值
     @JavascriptInterface
-    fun goBack() { ... }
+    fun goBack() {
+        context.get()?.runOnUiThread {
+            context.get()?.finish()
+        }
+    }
 }
 
-// 注入
+// 注入（第二個參數 "MyBridge" 即為 Web 端呼叫時使用的物件名稱）
 webView.addJavascriptInterface(JsBridge(WeakReference(this)), "MyBridge")
 ```
 
-在 Console 中可以這樣測試：
+#### Web 端呼叫方式
+
+Web 端透過 `window.MyBridge` 存取 Android 注入的方法：
+
+```javascript
+// 無參數，有回傳值
+function getToken() {
+    if (window.MyBridge) {
+        return window.MyBridge.getToken()
+    }
+}
+
+// 有參數，無回傳值
+function showToast(message) {
+    if (window.MyBridge) {
+        window.MyBridge.showToast(message)
+    }
+}
+
+// 無參數，無回傳值
+function goBack() {
+    if (window.MyBridge) {
+        window.MyBridge.goBack()
+    }
+}
+```
+
+> **注意**：呼叫前務必用 `if (window.MyBridge)` 檢查物件是否存在，避免在非 Android 環境（如瀏覽器、iOS）中報錯。
+
+#### 在 Console 中測試
 
 ```javascript
 // 無參數 — 取得回傳值
