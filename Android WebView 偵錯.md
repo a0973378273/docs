@@ -52,29 +52,54 @@ DevTools 開啟後，切換到 **Console** 分頁。
 
 ### 確認 Interface 是否存在
 
-先輸入 interface 物件名稱確認它已被注入：
+先輸入 interface 物件名稱確認它已被注入（名稱對應 `addJavascriptInterface` 的第二個參數）：
 
 ```javascript
-window.AndroidShow
+window.MyBridge
 // 預期輸出：Object（非 undefined）
 ```
 
 ### 列出所有可用方法
 
 ```javascript
-Object.getOwnPropertyNames(window.AndroidShow)
-// 預期輸出：["goToProfile", "goToSearch", "showSoundStateToast", "onForceLogout", ...]
+Object.getOwnPropertyNames(window.MyBridge)
+// 預期輸出：["getToken", "goBack", "showToast", ...]
 ```
 
 ### 呼叫測試
 
-```javascript
-// 測試帶參數的方法
-window.AndroidShow.showSoundStateToast("true")   // 應顯示「聲音已關閉」Toast
-window.AndroidShow.showSoundStateToast("false")  // 應顯示「聲音已開啟」Toast
+假設 Android 端定義了以下 interface：
 
-// 測試無參數的方法（注意：此方法會關閉 WebView）
-window.AndroidShow.onForceLogout()
+```kotlin
+class JsBridge(private val context: WeakReference<Activity>) {
+
+    @JavascriptInterface
+    fun getToken(): String { ... }
+
+    @JavascriptInterface
+    fun showToast(message: String) { ... }
+
+    @JavascriptInterface
+    fun goBack() { ... }
+}
+
+// 注入
+webView.addJavascriptInterface(JsBridge(WeakReference(this)), "MyBridge")
+```
+
+在 Console 中可以這樣測試：
+
+```javascript
+// 無參數 — 取得回傳值
+window.MyBridge.getToken()
+// 預期輸出："eyJhbGciOiJIUzI1NiIs..."
+
+// 有參數 — 觸發原生行為
+window.MyBridge.showToast("Hello from DevTools")
+// 預期：裝置上顯示 Toast
+
+// 無參數 — 觸發頁面操作（注意：會關閉 WebView）
+window.MyBridge.goBack()
 ```
 
 ## 常見問題
