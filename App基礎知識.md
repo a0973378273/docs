@@ -149,21 +149,25 @@ deactivate → dispose
 
 ### 主流方案比較
 
-| 面向 | Android — Hilt | iOS — Swinject / 手動注入 | Flutter — get_it / Riverpod |
-|------|---------------|--------------------------|----------------------------|
-| 類型 | 編譯時期 DI（Annotation Processor） | 執行時期 DI / 手動注入 | 執行時期 DI / 編譯時期檢查（Riverpod） |
-| 設定方式 | 用 `@Inject`、`@Module`、`@Provides` 等 annotation 宣告 | Swinject 用 container 註冊；手動注入則直接在 init 傳入 | get_it 用全域 container 註冊；Riverpod 用 Provider 宣告 |
-| 學習曲線 | 高（需理解 Hilt 的 Component 階層、Scope、Annotation） | 低（手動注入無框架）/ 中（Swinject） | 中（get_it 簡單）/ 中高（Riverpod 概念較多） |
-| 編譯時安全 | 高 — 缺少依賴在編譯時就會報錯 | 低 — 手動注入靠人；Swinject 執行時才知道有沒有註冊 | get_it 低（執行時才報錯）；Riverpod 高（編譯時檢查） |
-| 效能 | 好 — 編譯時生成程式碼，無反射開銷 | 好 — 手動注入零開銷；Swinject 有少量執行時開銷 | 好 — 兩者都是輕量 |
-| 生命週期管理 | 自動管理（`@Singleton`、`@ActivityScoped` 等，跟 Android 元件綁定） | 需手動管理或靠 Swinject 的 scope 設定 | get_it 支援 Singleton/Factory；Riverpod 自動 dispose |
-| 測試便利性 | 好 — 提供 `@TestInstallIn` 替換依賴 | 好 — 手動注入天生好測試（直接傳 mock） | 好 — 都能輕鬆替換為 mock |
+| 面向 | Android — Hilt / Koin | iOS — Swinject / 手動注入 | Flutter — get_it / Riverpod |
+|------|----------------------|--------------------------|----------------------------|
+| 類型 | Hilt：編譯時期 DI（Annotation Processor）；Koin：執行時期 DI（純 Kotlin DSL） | 執行時期 DI / 手動注入 | 執行時期 DI / 編譯時期檢查（Riverpod） |
+| 設定方式 | Hilt 用 `@Inject`、`@Module`、`@Provides` 等 annotation 宣告；Koin 用 Kotlin DSL（`module { single { } factory { } }`）宣告 | Swinject 用 container 註冊；手動注入則直接在 init 傳入 | get_it 用全域 container 註冊；Riverpod 用 Provider 宣告 |
+| 學習曲線 | Hilt 高（需理解 Component 階層、Scope、Annotation）；Koin 低（純 Kotlin，無 annotation，無程式碼生成） | 低（手動注入無框架）/ 中（Swinject） | 中（get_it 簡單）/ 中高（Riverpod 概念較多） |
+| 編譯時安全 | Hilt 高 — 缺少依賴在編譯時就會報錯；Koin 低 — 執行時才檢查（可用 `checkModules()` 單元測試彌補） | 低 — 手動注入靠人；Swinject 執行時才知道有沒有註冊 | get_it 低（執行時才報錯）；Riverpod 高（編譯時檢查） |
+| 效能 | Hilt 好 — 編譯時生成程式碼，無反射開銷；Koin 好 — 無反射，但啟動時需初始化 container | 好 — 手動注入零開銷；Swinject 有少量執行時開銷 | 好 — 兩者都是輕量 |
+| 生命週期管理 | Hilt 自動管理（`@Singleton`、`@ActivityScoped` 等，跟 Android 元件綁定）；Koin 支援 scope 綁定（`scope<Activity> { }`）但需手動管理生命週期 | 需手動管理或靠 Swinject 的 scope 設定 | get_it 支援 Singleton/Factory；Riverpod 自動 dispose |
+| 測試便利性 | Hilt 好 — 提供 `@TestInstallIn` 替換依賴；Koin 好 — 提供 `loadKoinModules` 動態替換 | 好 — 手動注入天生好測試（直接傳 mock） | 好 — 都能輕鬆替換為 mock |
 
 ### 優缺點摘要
 
 **Android Hilt**
 - 優點：Google 官方推薦、編譯時安全、與 Android 生命週期深度整合
 - 缺點：學習成本高、annotation 多、編譯時間增加、錯誤訊息難讀
+
+**Android Koin**
+- 優點：純 Kotlin DSL 語法簡潔、學習成本低、無程式碼生成所以編譯速度快、Kotlin Multiplatform 支援
+- 缺點：執行時期才檢查依賴（缺少依賴在 App 啟動或使用時才會 crash）、大型專案中 module 管理較鬆散
 
 **iOS 手動注入 / Swinject**
 - 優點：手動注入簡單直觀零依賴；iOS 社群主流偏好簡潔
