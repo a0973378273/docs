@@ -181,7 +181,7 @@ deactivate → dispose
 
 ## 五、網路請求
 
-### 主流方案比較
+### 主流方案比較（最多人用）
 
 | 面向 | Android — Retrofit + OkHttp | iOS — URLSession / Alamofire | Flutter — dio / http |
 |------|---------------------------|------------------------------|---------------------|
@@ -193,19 +193,44 @@ deactivate → dispose
 | 快取 | OkHttp 內建 HTTP 快取 | URLSession 內建 URLCache | 需手動實作或用 dio_cache_interceptor |
 | 檔案上傳 | `@Multipart` + `@Part` annotation | Alamofire `upload(multipartFormData:)` | `dio.post()` + `FormData` |
 
+### 新興方案比較（最新流行）
+
+| 面向 | Android — Ktor Client | iOS — Moya | Flutter — Retrofit for Dart |
+|------|----------------------|------------|----------------------------|
+| 定位 | JetBrains 官方 Kotlin 原生 HTTP Client，專為 Kotlin Multiplatform（KMP）設計 | 基於 Alamofire 的型別安全 API 抽象層，用 enum 定義所有端點 | 受 Android Retrofit 啟發，底層使用 dio，透過註解 + 程式碼生成定義 API |
+| API 定義方式 | Kotlin DSL Builder（`client.get("url") { parameter("key", value) }`） | `enum` + `TargetType` 協定（定義 baseURL、path、method、task） | 抽象類別 + 註解（`@GET`、`@POST`、`@Body`）+ `build_runner` 程式碼生成 |
+| 序列化 | 透過 Plugin 安裝，首選 `kotlinx.serialization`（KMP 友好） | `Codable`，搭配擴充方法 `response.map(Decodable.self)` | 搭配 `json_serializable`，自動處理 `fromJson`/`toJson` |
+| 攔截器 | Plugin 系統（類似中介層），可自訂 Request/Response Pipeline 各階段 | Moya Plugin 系統（`willSend`、`didReceive`），同時繼承 Alamofire Interceptor | 繼承 dio 的完整攔截器系統 |
+| 非同步模型 | 原生 Coroutines，所有 API 都是 `suspend fun` | Swift async/await、Combine、RxSwift（透過 RxMoya） | Dart Future / async-await |
+| 快取 | 需安裝 `HttpCache` Plugin | 繼承 Alamofire/URLSession 的 URLCache | 繼承 dio 的快取插件 |
+| 檔案上傳 | `submitFormWithBinaryData` + `formData { }` DSL | `Task.uploadMultipart` + `MultipartFormData` | `@MultiPart` + `@Part` 註解，支援 `File` 物件 |
+| 跨平台能力 | KMP 全平台（Android/iOS/Desktop/Server） | 僅 Apple 平台 | Flutter 全平台 |
+
 ### 優缺點摘要
 
-**Android Retrofit + OkHttp**
+**Android Retrofit + OkHttp**（業界標準）
 - 優點：型別安全、自動序列化、攔截器生態成熟、業界標準
-- 缺點：兩層抽象（Retrofit + OkHttp）學習成本較高、annotation 多
+- 缺點：兩層抽象（Retrofit + OkHttp）學習成本較高、annotation 多、不支援 KMP
 
-**iOS URLSession / Alamofire**
+**Android Ktor Client**（新興流行）
+- 優點：Kotlin 原生 DSL 語法現代化、KMP 跨平台共用網路層、引擎可替換（OkHttp/CIO/Darwin）、模組化輕量、JetBrains 官方維護
+- 缺點：無介面註解式 API 定義（從 Retrofit 遷移需改寫）、生態與資源仍不如 Retrofit 豐富
+
+**iOS URLSession / Alamofire**（業界標準）
 - 優點：URLSession 零依賴系統內建；Alamofire 語法簡潔、社群活躍
 - 缺點：URLSession 原生寫法冗長（需手動處理 Request 建構、錯誤處理）；Alamofire 對比 Retrofit 缺少型別安全的 API 定義
 
-**Flutter dio / http**
+**iOS Moya**（新興流行）
+- 優點：強型別 API 定義（enum + TargetType）、內建 `sampleData` 方便測試與 mock、Plugin 系統簡潔、與 RxSwift/Combine 無縫整合
+- 缺點：多一層依賴（Moya → Alamofire → URLSession）、每新增 API 需修改 enum 的多個 switch case、小型專案可能過度設計
+
+**Flutter dio / http**（業界標準）
 - 優點：http 輕量適合簡單場景；dio 功能完整（攔截器、取消請求、進度監聽），API 風格直覺
 - 缺點：http 功能陽春（無攔截器、無檔案上傳便利 API）；dio 是第三方套件，需注意維護狀態；序列化不如 Retrofit 自動化
+
+**Flutter Retrofit for Dart**（新興流行）
+- 優點：最接近 Android Retrofit 的體驗、底層使用 dio 功能不打折、與 `json_serializable` 整合良好、型別安全 + 程式碼生成
+- 缺點：依賴 `build_runner`（大型專案生成速度慢）、額外抽象層（retrofit → dio → http）、社群不如 dio 直接使用大
 
 ---
 
