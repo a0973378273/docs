@@ -1,6 +1,6 @@
-# 設計模式與跨平台架構比較
+# App 架構與設計模式
 
-> 涵蓋 GoF 23 種設計模式、Clean Architecture 跨平台比較、單向資料流架構設計
+> 涵蓋 GoF 23 種設計模式、Clean Architecture 跨平台比較、單向資料流架構設計、Clean Code 核心原則
 
 ---
 
@@ -15,12 +15,16 @@
   - [3.1 核心原則](#31-核心原則)
   - [3.2 三層架構對照](#32-三層架構對照)
   - [3.3 技術棧對照](#33-技術棧對照)
-  - [3.4 各平台 Repository Pattern 實作](#34-各平台-repository-pattern-實作)
 - [四、單向資料流架構設計](#四單向資料流架構設計)
   - [4.1 核心概念](#41-核心概念)
   - [4.2 跨平台對應架構](#42-跨平台對應架構)
-  - [4.3 各平台實作範例](#43-各平台實作範例)
-- [五、架構模式演進與選擇指南](#五架構模式演進與選擇指南)
+- [五、Clean Code 核心原則](#五clean-code-核心原則)
+  - [5.1 SOLID 原則](#51-solid-原則)
+  - [5.2 命名規範](#52-命名規範)
+  - [5.3 函數設計](#53-函數設計)
+  - [5.4 錯誤處理](#54-錯誤處理)
+  - [5.5 其他重要原則](#55-其他重要原則)
+- [六、架構模式演進與選擇指南](#六架構模式演進與選擇指南)
 
 ---
 
@@ -595,87 +599,6 @@ block-beta
     style Flutter fill:#00BCD4,color:#fff
 ```
 
-### 3.4 各平台 Repository Pattern 實作
-
-#### Android (Kotlin)
-
-```kotlin
-// Domain Layer — 定義介面
-interface UserRepository {
-    fun getUser(id: String): Flow<Result<User>>
-}
-
-// Data Layer — 實作介面
-class UserRepositoryImpl @Inject constructor(
-    private val api: UserApi,
-    private val dao: UserDao,
-    private val mapper: UserMapper
-) : UserRepository {
-
-    override fun getUser(id: String): Flow<Result<User>> = flow {
-        val local = dao.getUser(id)?.let { mapper.toDomain(it) }
-        if (local != null) emit(Result.Success(local))
-
-        val remote = api.getUser(id)
-        dao.insert(mapper.toEntity(remote))
-        emit(Result.Success(mapper.toDomain(remote)))
-    }.catch { emit(Result.Error(it)) }
-}
-```
-
-#### iOS (Swift)
-
-```swift
-// Domain Layer
-protocol UserRepository {
-    func getUser(id: String) async throws -> User
-}
-
-// Data Layer
-class UserRepositoryImpl: UserRepository {
-    private let api: UserAPI
-    private let cache: UserCache
-
-    func getUser(id: String) async throws -> User {
-        if let cached = cache.getUser(id: id) {
-            return cached.toDomain()
-        }
-        let dto = try await api.getUser(id: id)
-        cache.save(dto)
-        return dto.toDomain()
-    }
-}
-```
-
-#### Flutter (Dart)
-
-```dart
-// Domain Layer
-abstract class UserRepository {
-  Future<Either<Failure, User>> getUser(String id);
-}
-
-// Data Layer
-class UserRepositoryImpl implements UserRepository {
-  final UserApi api;
-  final UserDao dao;
-
-  @override
-  Future<Either<Failure, User>> getUser(String id) async {
-    try {
-      final local = await dao.getUser(id);
-      if (local != null) return Right(local.toDomain());
-
-      final remote = await api.getUser(id);
-      await dao.insert(remote.toEntity());
-      return Right(remote.toDomain());
-    } catch (e) {
-      return Left(ServerFailure(e.toString()));
-    }
-  }
-}
-```
-
 ---
 
 ## 四、單向資料流架構設計
@@ -716,195 +639,210 @@ flowchart TD
 | **UI 訂閱** | `collectAsState()` / `collect {}` | `WithViewStore` / `@Observable` | `BlocBuilder` / `BlocListener` |
 | **組合性** | 手動組合 | `Scope` + child store | `MultiBlocProvider` |
 
-### 4.3 各平台實作範例
+---
 
-以「登入功能」為例：
+## 五、Clean Code 核心原則
 
-#### Android — MVI
+Clean Code 的原則跨平台通用，不分 Android、iOS 或 Flutter。以下整理最重要的核心原則。
 
-```kotlin
-// State
-data class LoginUiState(
-    val email: String = "",
-    val password: String = "",
-    val isLoading: Boolean = false,
-    val error: String? = null
-)
+### 5.1 SOLID 原則
 
-// Event
-sealed class LoginEvent {
-    data class EmailChanged(val email: String) : LoginEvent()
-    data class PasswordChanged(val password: String) : LoginEvent()
-    data object LoginClicked : LoginEvent()
-}
-
-// Effect（一次性事件）
-sealed class LoginEffect {
-    data object NavigateToHome : LoginEffect()
-    data class ShowToast(val message: String) : LoginEffect()
-}
-
-// ViewModel
-class LoginViewModel @Inject constructor(
-    private val loginUseCase: LoginUseCase
-) : ViewModel() {
-
-    private val _state = MutableStateFlow(LoginUiState())
-    val state: StateFlow<LoginUiState> = _state.asStateFlow()
-
-    private val _effect = Channel<LoginEffect>()
-    val effect: Flow<LoginEffect> = _effect.receiveAsFlow()
-
-    fun onEvent(event: LoginEvent) {
-        when (event) {
-            is LoginEvent.EmailChanged ->
-                _state.update { it.copy(email = event.email) }
-            is LoginEvent.PasswordChanged ->
-                _state.update { it.copy(password = event.password) }
-            is LoginEvent.LoginClicked -> login()
-        }
-    }
-
-    private fun login() {
-        viewModelScope.launch {
-            _state.update { it.copy(isLoading = true, error = null) }
-            loginUseCase(state.value.email, state.value.password)
-                .onSuccess { _effect.send(LoginEffect.NavigateToHome) }
-                .onFailure { _state.update { s -> s.copy(error = it.message) } }
-            _state.update { it.copy(isLoading = false) }
-        }
-    }
-}
+```mermaid
+flowchart TD
+    SOLID --> S["S — Single Responsibility\n單一職責原則"]
+    SOLID --> O["O — Open/Closed\n開放封閉原則"]
+    SOLID --> L["L — Liskov Substitution\nLiskov 替換原則"]
+    SOLID --> I["I — Interface Segregation\n介面隔離原則"]
+    SOLID --> D["D — Dependency Inversion\n依賴反轉原則"]
+    style SOLID fill:#FF9800,color:#fff
 ```
 
-#### iOS — TCA
+| 原則 | 說明 | 行動開發中的體現 |
+|------|------|----------------|
+| **S — 單一職責** | 一個類別只應該有一個改變的理由 | ViewModel 只處理 UI 邏輯、UseCase 只處理業務邏輯、Repository 只處理資料存取 |
+| **O — 開放封閉** | 對擴展開放，對修改封閉 | 使用 Strategy 模式新增驗證規則，不修改既有程式碼 |
+| **L — Liskov 替換** | 子類別必須能替換父類別而不影響程式正確性 | Repository 介面的不同實作（MockRepo / RealRepo）可互換 |
+| **I — 介面隔離** | 不應強迫客戶端依賴它不需要的介面 | 將大介面拆成小介面，如 `Readable` + `Writable` 而非一個大 `Storage` |
+| **D — 依賴反轉** | 高層模組不應依賴低層模組，兩者都應依賴抽象 | Domain 層定義 Repository 介面，Data 層實作，透過 DI 注入 |
 
-```swift
-// Feature
-@Reducer
-struct LoginFeature {
-    @ObservableState
-    struct State: Equatable {
-        var email = ""
-        var password = ""
-        var isLoading = false
-        var error: String?
-    }
+#### S — 單一職責原則（Single Responsibility Principle）
 
-    enum Action: Equatable {
-        case emailChanged(String)
-        case passwordChanged(String)
-        case loginTapped
-        case loginResponse(Result<User, APIError>)
-    }
-
-    var body: some ReducerOf<Self> {
-        Reduce { state, action in
-            switch action {
-            case let .emailChanged(email):
-                state.email = email
-                return .none
-            case let .passwordChanged(password):
-                state.password = password
-                return .none
-            case .loginTapped:
-                state.isLoading = true
-                state.error = nil
-                return .run { [email = state.email, pw = state.password] send in
-                    let result = await apiClient.login(email, pw)
-                    await send(.loginResponse(result))
-                }
-            case let .loginResponse(.success(user)):
-                state.isLoading = false
-                return .none
-            case let .loginResponse(.failure(error)):
-                state.isLoading = false
-                state.error = error.localizedDescription
-                return .none
-            }
-        }
-    }
-}
+```mermaid
+flowchart LR
+    subgraph Bad["違反 SRP"]
+        God["GodActivity\n處理 UI + 網路 + DB + 驗證"]
+    end
+    subgraph Good["遵守 SRP"]
+        View["View\n只負責 UI"]
+        VM2["ViewModel\n只負責狀態"]
+        UC2["UseCase\n只負責業務邏輯"]
+        Repo["Repository\n只負責資料"]
+    end
+    style Bad fill:#F44336,color:#fff
+    style Good fill:#4CAF50,color:#fff
 ```
 
-#### Flutter — BLoC
+**關鍵判斷**：如果你描述一個類別的功能時用了「而且」，它可能違反了 SRP。
 
-```dart
-// State
-class LoginState extends Equatable {
-  final String email;
-  final String password;
-  final bool isLoading;
-  final String? error;
+---
 
-  const LoginState({
-    this.email = '',
-    this.password = '',
-    this.isLoading = false,
-    this.error,
-  });
+#### O — 開放封閉原則（Open/Closed Principle）
 
-  LoginState copyWith({String? email, String? password, bool? isLoading, String? error}) {
-    return LoginState(
-      email: email ?? this.email,
-      password: password ?? this.password,
-      isLoading: isLoading ?? this.isLoading,
-      error: error,
-    );
-  }
+**核心**：透過抽象和多型來擴展行為，而不是修改現有程式碼。
 
-  @override
-  List<Object?> get props => [email, password, isLoading, error];
-}
+```mermaid
+flowchart TD
+    subgraph 擴展["新增需求時"]
+        Interface["抽象介面"] --> ImplA["實作 A\n（既有）"]
+        Interface --> ImplB["實作 B\n（新增）"]
+    end
+    style 擴展 fill:#E8F5E9,stroke:#2E7D32
+```
 
-// Event
-abstract class LoginEvent extends Equatable {}
+**實踐方式**：
+- 新增驗證規則 → 新增一個 `Validator` 實作，不改現有的
+- 新增 API 來源 → 新增一個 `DataSource` 實作，不改 Repository
 
-class EmailChanged extends LoginEvent {
-  final String email;
-  EmailChanged(this.email);
-  @override
-  List<Object> get props => [email];
-}
+---
 
-class PasswordChanged extends LoginEvent {
-  final String password;
-  PasswordChanged(this.password);
-  @override
-  List<Object> get props => [password];
-}
+#### L — Liskov 替換原則（Liskov Substitution Principle）
 
-class LoginSubmitted extends LoginEvent {
-  @override
-  List<Object> get props => [];
-}
+**核心**：子類別必須完全遵守父類別的契約，不能破壞預期行為。
 
-// BLoC
-class LoginBloc extends Bloc<LoginEvent, LoginState> {
-  final LoginUseCase loginUseCase;
+**違反範例**：`正方形 extends 長方形` — 設定寬度時連高度一起改，破壞了長方形的行為契約
 
-  LoginBloc({required this.loginUseCase}) : super(const LoginState()) {
-    on<EmailChanged>((event, emit) {
-      emit(state.copyWith(email: event.email));
-    });
-    on<PasswordChanged>((event, emit) {
-      emit(state.copyWith(password: event.password));
-    });
-    on<LoginSubmitted>((event, emit) async {
-      emit(state.copyWith(isLoading: true, error: null));
-      final result = await loginUseCase(state.email, state.password);
-      result.fold(
-        (failure) => emit(state.copyWith(isLoading: false, error: failure.message)),
-        (user) => emit(state.copyWith(isLoading: false)),
-      );
-    });
-  }
-}
+**行動開發中的實踐**：
+- `MockRepository` 替換 `RealRepository` 做測試時，行為契約必須一致
+- `sealed class` / `enum` 比繼承更安全，編譯器幫你檢查所有情況
+
+---
+
+#### I — 介面隔離原則（Interface Segregation Principle）
+
+```mermaid
+flowchart TD
+    subgraph Bad2["違反 ISP"]
+        BigI["interface Storage\nread() + write() + delete()\n+ sync() + backup()"]
+    end
+    subgraph Good2["遵守 ISP"]
+        R["Readable\nread()"]
+        W["Writable\nwrite() + delete()"]
+        Sy["Syncable\nsync()"]
+    end
+    style Bad2 fill:#F44336,color:#fff
+    style Good2 fill:#4CAF50,color:#fff
+```
+
+**關鍵判斷**：如果實作一個介面時需要寫空方法或 `throw NotImplemented`，就該拆分介面。
+
+---
+
+#### D — 依賴反轉原則（Dependency Inversion Principle）
+
+```mermaid
+flowchart TD
+    subgraph Bad3["違反 DIP"]
+        VM3["ViewModel"] -->|直接依賴| API3["RetrofitApi"]
+    end
+    subgraph Good3["遵守 DIP"]
+        VM4["ViewModel"] --> UC3["UseCase"]
+        UC3 --> RepoI2["Repository\n(interface)"]
+        RepoImpl3["RepositoryImpl"] -.->|implements| RepoI2
+        RepoImpl3 --> API4["RetrofitApi"]
+    end
+    style Bad3 fill:#F44336,color:#fff
+    style Good3 fill:#4CAF50,color:#fff
+```
+
+**核心**：高層模組（ViewModel）不應該知道低層模組（Retrofit）的存在，兩者透過抽象（Repository 介面）溝通。
+
+---
+
+### 5.2 命名規範
+
+| 原則 | 說明 | 好的範例 | 不好的範例 |
+|------|------|---------|-----------|
+| **有意義的名稱** | 名稱應該表達意圖 | `userAge`, `isLoggedIn` | `a`, `flag`, `data` |
+| **避免縮寫** | 除了業界通用縮寫外，不要自創縮寫 | `userRepository` | `usrRepo`, `uRp` |
+| **類別用名詞** | 類別代表一個「東西」 | `UserProfile`, `OrderItem` | `ProcessData`, `HandleUser` |
+| **函數用動詞** | 函數代表一個「動作」 | `fetchUser()`, `validateEmail()` | `user()`, `email()` |
+| **布林值用 is/has/can** | 讓條件判斷讀起來像自然語言 | `isValid`, `hasPermission` | `valid`, `permission` |
+| **常數全大寫** | 區分常數與變數 | `MAX_RETRY_COUNT` | `maxRetryCount` |
+| **避免 magic number** | 用具名常數取代神秘數字 | `TIMEOUT_SECONDS = 30` | 直接寫 `30` |
+
+### 5.3 函數設計
+
+| 原則 | 說明 |
+|------|------|
+| **短小精悍** | 一個函數理想不超過 20 行，做一件事 |
+| **單一層級抽象** | 函數內的操作應該在同一個抽象層級 |
+| **參數越少越好** | 理想 0-2 個，超過 3 個考慮封裝成物件 |
+| **避免副作用** | 函數名稱暗示做 A，實際上偷偷做了 B |
+| **Command-Query 分離** | 修改狀態的函數不回傳值，回傳值的函數不修改狀態 |
+| **DRY（Don't Repeat Yourself）** | 重複的邏輯抽取成共用函數 |
+| **提早返回** | 用 guard clause / early return 減少巢狀層級 |
+
+```mermaid
+flowchart TD
+    subgraph Bad4["深層巢狀"]
+        N1["if (a)"] --> N2["if (b)"]
+        N2 --> N3["if (c)"]
+        N3 --> N4["實際邏輯"]
+    end
+    subgraph Good4["提早返回"]
+        G1["if (!a) return"]
+        G1 --> G2["if (!b) return"]
+        G2 --> G3["if (!c) return"]
+        G3 --> G4["實際邏輯"]
+    end
+    style Bad4 fill:#F44336,color:#fff
+    style Good4 fill:#4CAF50,color:#fff
+```
+
+### 5.4 錯誤處理
+
+| 原則 | 說明 |
+|------|------|
+| **使用型別系統** | 用 `sealed class Result` / `Either` 而非 try-catch 做業務錯誤處理 |
+| **不吞掉例外** | 不要寫空的 `catch {}` 區塊 |
+| **錯誤訊息要有意義** | 包含足夠的上下文讓開發者能定位問題 |
+| **區分可恢復與不可恢復** | 網路逾時可重試（可恢復），NPE 是程式錯誤（不可恢復） |
+| **邊界驗證** | 只在系統邊界（使用者輸入、API 回應）做驗證，內部信任型別系統 |
+
+```mermaid
+flowchart LR
+    Input["外部輸入"] -->|驗證| Boundary["系統邊界"]
+    Boundary -->|型別安全| Internal["內部邏輯"]
+    Internal -->|Result/Either| Output["輸出結果"]
+    style Boundary fill:#FF9800,color:#fff
+```
+
+### 5.5 其他重要原則
+
+| 原則 | 說明 |
+|------|------|
+| **KISS** | Keep It Simple, Stupid — 用最簡單的方式解決問題 |
+| **YAGNI** | You Aren't Gonna Need It — 不要為了假想的未來需求寫程式 |
+| **Boy Scout Rule** | 離開時讓程式碼比你來時更乾淨 |
+| **Composition over Inheritance** | 優先使用組合而非繼承，Kotlin 的 `by` 委託是好例子 |
+| **Fail Fast** | 問題越早暴露越好，不要用 fallback 掩蓋錯誤 |
+| **Law of Demeter** | 只與直接朋友溝通，避免 `a.b.c.d.doSomething()` 的鏈式呼叫 |
+| **Immutability** | 優先使用不可變物件，減少共享可變狀態帶來的問題 |
+
+```mermaid
+flowchart TD
+    subgraph 核心思維
+        direction TB
+        Simple["KISS\n保持簡單"] --- Needed["YAGNI\n只做需要的"]
+        Needed --- Clean["Boy Scout\n持續改善"]
+        Clean --- Safe["Immutability\n不可變優先"]
+    end
+    style 核心思維 fill:#E8EAF6,stroke:#283593
 ```
 
 ---
 
-## 五、架構模式演進與選擇指南
+## 六、架構模式演進與選擇指南
 
 ### 架構演進路線
 
