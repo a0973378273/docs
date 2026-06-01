@@ -680,7 +680,223 @@ WebSocket 是一種在**單一 TCP 連線上進行全雙工通訊**的協定。�
 
 ---
 
-## 十六、總結對照表
+## 十六、OOM 與記憶體洩漏
+
+### 什麼是 OOM
+
+OOM（Out of Memory）指應用程式的記憶體使用量超過系統限制，導致進程被強制終止或拋出例外。行動裝置的記憶體有限，OOM 是 App 閃退的主要原因之一。
+
+### 各平台記憶體模型
+
+**Android — Dalvik/ART Heap**
+- 每個 App 有獨立的 Heap 上限（依裝置而異，通常 128-512MB）
+- 超過上限時拋出 `OutOfMemoryError`，App 閃退
+- 可用 `ActivityManager.getMemoryClass()` 查詢上限（單位 MB）
+- `largeHeap=true` 可申請更大的 Heap（不建議濫用，不保證取得更多記憶體）
+- 系統記憶體不足時依 LMK（Low Memory Killer）機制按優先級殺掉背景 App
+
+**iOS — Jetsam**
+- iOS 沒有傳統的 OOM 例外，記憶體超限時系統直接殺掉 App（Jetsam 機制）
+- 沒有明確的 Heap 上限，取決於裝置總記憶體和當前系統狀態
+- 經驗值：使用超過裝置實體記憶體的 50%~70% 就可能被殺
+- 系統會先發送記憶體警告（`didReceiveMemoryWarning()`），App 應在此時釋放快取
+- MetricKit 和 Xcode Organizer 可追蹤 OOM 終止事件
+
+**Flutter — Dart GC + 原生層**
+- Dart 有自動垃圾回收（GC），但 GC 只管理 Dart Heap
+- 圖片解碼後的像素資料存在原生記憶體，不受 Dart GC 管理
+- `ImageCache` 預設最多快取 100 張圖 / 100MB，可透過 `PaintingBinding.instance.imageCache` 調整
+- Isolate 各自有獨立的 Heap，大量 Isolate 會加速記憶體消耗
+
+### 常見 OOM 原因
+
+| 原因 | 說明 | 典型場景 |
+|------|------|----------|
+| **大圖片載入** | 載入未壓縮的大圖占用大量記憶體 | 相簿瀏覽、長圖列表 |
+| **記憶體洩漏** | 物件該釋放卻未釋放，記憶體持續增長 | 詳見下方記憶體洩漏章節 |
+| **大量資料一次載入** | 將全部資料載入記憶體而非分頁 | 不分頁的列表、大 JSON/XML 解析 |
+| **WebView** | WebView 本身消耗大量記憶體 | 內嵌多個 WebView 的頁面 |
+| **多媒體處理** | 影片解碼、音訊處理佔用大量緩衝區 | 影片編輯、濾鏡處理 |
+
+### 記憶體洩漏
+
+記憶體洩漏指**物件已經不再需要，但因為仍被引用而無法被 GC/ARC 回收**，導致可用記憶體持續減少，最終觸發 OOM。
+
+**Android — 常見洩漏模式**
+
+| 洩漏模式 | 原因 | 修正方式 |
+|----------|------|----------|
+| `static` 持有 Activity 參考 | Activity 無法被 GC 回收 | 用 `WeakReference` 或避免 static 持有 Context |
+| 匿名內部類別持有外部類別 | 內部類別隱式持有外部 Activity 參考 | 改用 `static` 內部類別 + `WeakReference` |
+| Handler/Runnable 持有 Activity | Handler 的 Message 排隊中時 Activity 無法回收 | `removeCallbacksAndMessages(null)` 或用 `lifecycleScope` |
+| 未取消註冊的 Listener/Callback | 物件被 EventBus、BroadcastReceiver 等持有 | 在 `onDestroy()` / `onCleared()` 中取消註冊 |
+| Coroutine 綁錯 Scope | 用 `GlobalScope` 導致 Coroutine 存活太久 | 用 `viewModelScope` / `lifecycleScope` |
+| Bitmap 未回收 | 不再需要的大圖仍在記憶體 | 使用 Coil/Glide 自動管理；手動呼叫 `recycle()` |
+
+- **LeakCanary**：Square 開源的記憶體洩漏偵測工具，Debug build 自動偵測並顯示洩漏路徑
+- **Android Profiler**：即時觀察 Heap 使用量，可 Dump Heap 分析物件持有鏈
+
+**iOS — 常見洩漏模式**
+
+iOS 使用 ARC（Automatic Reference Counting）管理記憶體，不是 GC。ARC 在編譯期插入 retain/release，但**無法自動處理循環引用（Retain Cycle）**。
+
+| 洩漏模式 | 原因 | 修正方式 |
+|----------|------|----------|
+| Closure 強引用 self | Closure 捕獲 self，self 也持有 closure → 循環引用 | `[weak self]` 或 `[unowned self]` |
+| Delegate 用 strong 宣告 | A 持有 B，B.delegate 又強引用 A → 循環引用 | Delegate protocol 宣告為 `weak var delegate` |
+| Timer 持有 self | `Timer.scheduledTimer(target: self, ...)` 強引用 target | 用 closure-based Timer + `[weak self]`（iOS 10+） |
+| NotificationCenter 未移除 | Observer 被 NotificationCenter 持有（iOS 9 以下） | iOS 9+ 自動移除；舊版需 `removeObserver` |
+| DispatchQueue 捕獲 self | 長時間的 async block 持有 self | `[weak self]` guard 模式 |
+
+- **Xcode Memory Graph Debugger**：視覺化物件引用圖，紫色驚嘆號標記洩漏
+- **Instruments Leaks**：即時偵測洩漏，顯示 retain/release 歷程
+
+**Flutter — 常見洩漏模式**
+
+| 洩漏模式 | 原因 | 修正方式 |
+|----------|------|----------|
+| 未呼叫 `dispose()` | Controller、Animation、Stream 等未在 Widget 銷毀時釋放 | 在 `State.dispose()` 中呼叫 `.dispose()` / `.cancel()` |
+| StreamSubscription 未取消 | Stream 持續發送事件，Listener 未取消 | `subscription.cancel()` 在 `dispose()` 中執行 |
+| ChangeNotifier 未移除 Listener | `addListener` 後未 `removeListener` | 在 `dispose()` 中移除，或改用 `ListenableBuilder` |
+| GlobalKey 濫用 | GlobalKey 持有 State，阻止 Widget 被回收 | 只在必要時使用 GlobalKey |
+| 原生資源未釋放 | Platform Channel 取得的原生資源（Camera、Player） | 在 `dispose()` 中呼叫原生端 release |
+
+- **Flutter DevTools Memory Tab**：追蹤 Dart/Native/Total 記憶體使用，支援 Heap Snapshot 分析
+
+### OOM 預防與處理策略
+
+| 策略 | Android | iOS | Flutter |
+|------|---------|-----|---------|
+| 圖片降採樣 | `BitmapFactory.Options.inSampleSize` | `CGImageSourceCreateThumbnailAtPixelSize` | `ResizeImage` / `cacheWidth` + `cacheHeight` |
+| 圖片快取管理 | Coil/Glide 自動管理 | Kingfisher 自動管理 | `ImageCache` 設定上限 |
+| 列表回收 | `LazyColumn` / `RecyclerView` 自動回收 | `LazyVStack` / `UITableView` 自動回收 | `ListView.builder` 自動回收 |
+| 記憶體警告回應 | `onTrimMemory()` 釋放快取 | `didReceiveMemoryWarning()` 釋放快取 | `WidgetsBindingObserver.didHaveMemoryPressure()` |
+| 大資料分頁 | Paging 3 Library | 手動分頁 / `fetchLimit` | `infinite_scroll_pagination` |
+| 洩漏偵測 | LeakCanary（自動） | Instruments + Memory Graph | DevTools Memory Tab |
+| 監控上報 | Firebase Crashlytics | MetricKit + Xcode Organizer | Firebase Crashlytics |
+
+### 三平台 OOM 與記憶體洩漏對照表
+
+| 面向 | Android | iOS | Flutter |
+|------|---------|-----|---------|
+| 記憶體管理機制 | GC（Garbage Collection） | ARC（Automatic Reference Counting） | GC（Dart VM） |
+| OOM 表現 | 拋出 `OutOfMemoryError` | 系統直接殺掉 App（Jetsam） | Dart OOM 或觸發原生 OOM |
+| Heap 上限 | 明確（128-512MB，依裝置） | 無明確上限（依裝置總記憶體） | Dart Heap + Native Heap |
+| 主要洩漏原因 | 持有 Activity/Context 參考 | 循環引用（Retain Cycle） | 未呼叫 `dispose()` |
+| 洩漏偵測工具 | LeakCanary | Xcode Memory Graph / Instruments Leaks | DevTools Memory Tab |
+| 記憶體分析 | Android Profiler / MAT | Instruments Allocations | DevTools Heap Snapshot |
+| 記憶體警告 API | `onTrimMemory(level)` | `didReceiveMemoryWarning()` | `didHaveMemoryPressure()` |
+| 線上監控 | Firebase Crashlytics / Play Vitals | MetricKit / Xcode Organizer | Firebase Crashlytics |
+
+---
+
+## 十七、ANR 與應用無回應
+
+### 什麼是 ANR
+
+ANR（Application Not Responding）是 Android 的專有術語，指 App 的**主執行緒被阻塞過久**，系統彈出「應用程式無回應」對話框。iOS 和 Flutter 沒有 ANR 這個名詞，但有等價概念（Watchdog Termination / UI Jank）。
+
+### 各平台的「無回應」機制
+
+**Android — ANR**
+
+系統在以下條件下觸發 ANR：
+
+| 觸發條件 | 逾時時間 |
+|----------|----------|
+| 輸入事件（觸控/按鍵）未在時限內處理 | 5 秒 |
+| 前景 BroadcastReceiver `onReceive()` 未完成 | 10 秒 |
+| 背景 BroadcastReceiver `onReceive()` 未完成 | 60 秒 |
+| 前景 Service 未完成 `onCreate()` / `onStartCommand()` | 20 秒 |
+| `ContentProvider` 的 `onCreate()` 未完成 | 10 秒 |
+
+常見原因：
+- 主執行緒執行網路請求、磁碟 I/O、資料庫查詢
+- 主執行緒 `synchronized` 等待已被背景執行緒持有的鎖（死鎖）
+- 主執行緒執行大量運算（JSON 解析、圖片處理）
+- `SharedPreferences.commit()`（同步寫入，應改用 `apply()`）
+
+偵測與工具：
+- **StrictMode**：開發階段偵測主執行緒的磁碟/網路操作
+- **ANR Traces**：系統在 `/data/anr/traces.txt` 記錄 ANR 時的執行緒堆疊
+- **Google Play Vitals**：線上用戶的 ANR 率（目標 < 0.47%）
+- **Perfetto / Systrace**：精確分析主執行緒執行時間軸
+
+**iOS — Watchdog Termination / Hang**
+
+iOS 沒有 ANR 對話框，但有兩種等價機制：
+
+**1. Watchdog 終止**：系統在特定生命週期階段監控 App 回應時間，超時直接殺掉 App（不是閃退，是被系統終止）
+
+| 觸發條件 | 大約逾時時間 |
+|----------|-------------|
+| App 啟動（`didFinishLaunchingWithOptions` 完成前） | ~20 秒 |
+| App 進入前景 | ~10 秒 |
+| App 進入背景（`applicationDidEnterBackground` 完成前） | ~5-10 秒 |
+| App 恢復（`applicationWillEnterForeground` 完成前） | ~10 秒 |
+
+**2. Hang（UI 卡頓）**：主執行緒阻塞超過 250ms 即被視為 Hang
+
+- **MXHangDiagnostic**（MetricKit，iOS 14+）：收集使用者裝置上的 Hang 資訊
+- **Instruments Time Profiler**：分析主執行緒的 CPU 使用
+- **Xcode Organizer → Hangs**：查看線上用戶的 Hang 報告
+
+**Flutter — UI Jank / Frame Drop**
+
+Flutter 是單執行緒模型，主 Isolate 同時負責 UI 構建和業務邏輯。
+
+| 概念 | 說明 |
+|------|------|
+| **Jank** | 單幀渲染超過 16ms（60fps）或 8ms（120fps），造成掉幀卡頓 |
+| **Frozen Frame** | 單幀渲染超過 700ms，使用者可明顯感知 App「凍結」 |
+
+- Flutter 不會被系統彈出「無回應」對話框（原生 UI 由 Engine 繪製），但嚴重阻塞仍可能觸發 Android ANR
+- **Flutter DevTools Performance Tab**：即時顯示每幀 Build/Layout/Paint 時間
+- **`SchedulerBinding.addTimingsCallback`**：程式化偵測掉幀
+
+### 常見無回應原因與修正
+
+| 原因 | 修正方式 |
+|------|----------|
+| 主執行緒執行 I/O | 移到背景執行緒（`Dispatchers.IO` / `DispatchQueue.global` / `Isolate.run`） |
+| 主執行緒解析大 JSON | 用 `compute()` / 背景 Isolate / 背景執行緒處理 |
+| 同步資料庫操作 | 改用非同步 API（Room suspend / SwiftData @Query / sqflite async） |
+| 複雜 UI 佈局 | 簡化巢狀層級，使用 `LazyColumn` / `LazyVStack` / `ListView.builder` |
+| 啟動初始化過重 | 延遲初始化（`App Startup` Library / 延遲到首屏載入後） |
+| 主執行緒等待鎖 | 避免主執行緒使用 `synchronized` / `NSLock`，改用 async 機制 |
+| `SharedPreferences.commit()` | 改用 `apply()`（非同步寫入）或遷移至 DataStore |
+
+### ANR/Hang 排查流程
+
+```
+1. 重現問題或從監控平台取得報告（Play Vitals / Xcode Organizer / Firebase）
+2. 取得主執行緒堆疊（ANR Trace / Hang Log / DevTools Timeline）
+3. 定位阻塞點 — 找到主執行緒卡在哪個方法
+4. 分析原因：
+   - I/O 操作？→ 移到背景
+   - 計算密集？→ 移到背景
+   - 等待鎖？→ 重構同步機制
+   - 第三方 SDK？→ 延遲初始化或放到背景
+5. 修復後用 Profiler 確認主執行緒無長時間阻塞
+6. 上線後持續監控指標
+```
+
+### 三平台無回應對照表
+
+| 面向 | Android | iOS | Flutter |
+|------|---------|-----|---------|
+| 名稱 | ANR（Application Not Responding） | Watchdog Termination / Hang | UI Jank / Frozen Frame |
+| 系統回饋 | 彈出 ANR 對話框 | 直接殺掉 App（Watchdog）/ 無提示（Hang） | 掉幀卡頓（嚴重時觸發 Android ANR） |
+| 主要閾值 | 輸入事件 5 秒 | 啟動 ~20 秒 / Hang 250ms | 16ms per frame（60fps） |
+| 偵測工具（開發） | StrictMode + Perfetto | Instruments Time Profiler | DevTools Performance Tab |
+| 偵測工具（線上） | Google Play Vitals（ANR 率） | MetricKit MXHangDiagnostic | Firebase Performance |
+| 品質指標 | ANR 率 < 0.47% | Hang 率（Xcode Organizer） | 掉幀率 / Frozen Frame 率 |
+| 背景執行方式 | `Dispatchers.IO` / `Dispatchers.Default` | `DispatchQueue.global()` / `Task.detached` | `Isolate.run()` / `compute()` |
+| 啟動優化 | App Startup Library / Baseline Profiles | 減少 `didFinishLaunching` 工作量 | Deferred Components / 延遲初始化 |
+
+---
+
+## 十八、總結對照表
 
 | 面向 | Android | iOS | Flutter |
 |------|---------|-----|---------|
@@ -698,6 +914,10 @@ WebSocket 是一種在**單一 TCP 連線上進行全雙工通訊**的協定。�
 | 程式碼保護 | R8 混淆 | Bitcode + FairPlay | `--obfuscate` |
 | 安全儲存 | EncryptedSharedPreferences | Keychain | flutter_secure_storage |
 | 效能工具 | Android Profiler | Instruments | DevTools |
+| 記憶體管理 | GC（ART） | ARC | GC（Dart VM） |
+| OOM 處理 | `onTrimMemory()` + LeakCanary | `didReceiveMemoryWarning()` + Jetsam | `didHaveMemoryPressure()` |
+| 洩漏偵測 | LeakCanary | Instruments Leaks / Memory Graph | DevTools Memory Tab |
+| ANR/無回應 | ANR（5 秒閾值） | Watchdog / Hang（250ms） | Jank（16ms per frame） |
 | Unit Test | JUnit + MockK | XCTest / Swift Testing | package:test |
 | UI Test | Compose Testing / Espresso | XCUITest | Widget Test |
 | CI/CD | GitHub Actions + Gradle | Fastlane / Xcode Cloud | Codemagic / GitHub Actions |
